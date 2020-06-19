@@ -1,0 +1,12 @@
+{
+    "spellright.language": [
+        "en_AU"
+    ],
+    "spellright.documentTypes": [
+        "markdown",
+        "latex"
+    ],
+    "files.associations": {
+        "main.h": "c"
+    }
+}

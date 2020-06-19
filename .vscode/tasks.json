@@ -1,0 +1,16 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"command": "make",
+			"args": [],
+			"problemMatcher": ["$gcc"],
+			"label": "Makefile: build default target",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			}
+		}
+	]
+}
