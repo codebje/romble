@@ -24,6 +24,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "cli.h"
 
 /* USER CODE END Includes */
 
@@ -290,6 +291,9 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(SPI5_SS_GPIO_Port, SPI5_SS_Pin, GPIO_PIN_RESET);
+
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
@@ -302,6 +306,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SPI5_SS_Pin */
+  GPIO_InitStruct.Pin = SPI5_SS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(SPI5_SS_GPIO_Port, &GPIO_InitStruct);
 
 }
 
@@ -337,11 +348,13 @@ void StartDefaultTask(void *argument)
 void StartCLITask(void *argument)
 {
   /* USER CODE BEGIN StartCLITask */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
+  CLI_SetupTypeDef cli_config = {
+    &huart2,
+    &hspi5,
+    SPI5_SS_GPIO_Port,
+    SPI5_SS_Pin
+  };
+  cli_loop(&cli_config);
   /* USER CODE END StartCLITask */
 }
 

@@ -7,6 +7,7 @@
         "latex"
     ],
     "files.associations": {
-        "main.h": "c"
+        "main.h": "c",
+        "cstdio": "c"
     }
 }
