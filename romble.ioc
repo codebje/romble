@@ -2,7 +2,7 @@
 FREERTOS.FootprintOK=true
 FREERTOS.IPParameters=Tasks01,FootprintOK,Queues01
 FREERTOS.Queues01=usbReceive,32,uint8_t *,0,Dynamic,NULL,NULL
-FREERTOS.Tasks01=defaultTask,24,128,StartDefaultTask,Default,NULL,Dynamic,NULL,NULL;serMonitor,24,128,StartSerialMonitor,Default,NULL,Dynamic,NULL,NULL
+FREERTOS.Tasks01=defaultTask,24,128,StartDefaultTask,Default,NULL,Dynamic,NULL,NULL;serMonitor,40,128,StartSerialMonitor,Default,NULL,Dynamic,NULL,NULL
 File.Version=6
 KeepUserPlacement=false
 Mcu.Family=STM32F4

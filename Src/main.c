@@ -144,7 +144,7 @@ int main(void)
   /* definition and creation of serMonitor */
   const osThreadAttr_t serMonitor_attributes = {
     .name = "serMonitor",
-    .priority = (osPriority_t) osPriorityNormal,
+    .priority = (osPriority_t) osPriorityHigh,
     .stack_size = 128
   };
   serMonitorHandle = osThreadNew(StartSerialMonitor, NULL, &serMonitor_attributes);
@@ -354,6 +354,13 @@ void StartSerialMonitor(void *argument)
   /* Infinite loop */
   for(;;)
   {
+    uint8_t *msg;
+    if (osMessageQueueGet(usbReceiveHandle, msg, 1, osWaitForever) == osOK) {
+      uint32_t len = *((uint32_t *)msg);
+      // echo it back
+      CDC_Transmit_FS(msg + sizeof(uint32_t), len);
+      free(msg);
+    }
     osDelay(1);
   }
   /* USER CODE END StartSerialMonitor */

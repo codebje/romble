@@ -270,8 +270,9 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
   
   USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceFS);
-  uint8_t *copy = malloc(*Len);
-  memcpy(copy, Buf, *Len);
+  uint8_t *copy = malloc((*Len) + sizeof(uint32_t));
+  *((uint32_t *)copy) = *Len;
+  memcpy(copy + sizeof(uint32_t), Buf, *Len);
   osMessageQueuePut(usbReceiveHandle, copy, 1, 0);
   return (USBD_OK);
   /* USER CODE END 6 */
