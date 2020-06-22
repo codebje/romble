@@ -21,14 +21,14 @@ typedef struct __YModem_ControlDef {
      * The filename will always be supplied, but size may be zero if the sender did
      * not provide the data.
      */
-    int (*open)(void *, char *, uint32_t);
+    int (*open)(void *, const char *, uint32_t);
 
     /* 
      * Return a true value if the write was successful, or false to cancel the transfer.
      * The size will usually be 128 or 1024, except for the final packet, which will
      * be the truncated data size to end the file without padding bytes.
      */
-    int (*write)(void *, uint8_t *, uint16_t);
+    int (*write)(void *, const uint8_t *, uint16_t);
 
     /* 
      * Terminate a transfer.

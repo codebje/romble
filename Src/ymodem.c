@@ -1,6 +1,39 @@
-// A probably broken ymodem implementation
+/**
+ * A probably broken ymodem implementation.
+ * 
+ * Based on the documentation in XMODEM/YMODEM PROTOCOL REFERENCE
+ * 
+ *      http://www.blunk-electronic.de/train-z/pdf/xymodem.pdf
+ * 
+ * Tested against MINICOM's implementation, for receive only. This implementation supports 1024-byte blocks, batch
+ * transfers, and of course, CRC-16.
+ * 
+ * The basics of YMODEM are simple. The sender transmits a control byte, which is either SOH, STX, EOT, or CAN. SOH
+ * indicates a 128-byte data packet, and STX indicates a 1024-byte data packet. EOT is a single byte indicating the
+ * sender has no more packets to send. CAN followed by another CAN immediately terminates the transfer. The receiver
+ * responds to packets with ACK to indicate successful receipt or NAK to indicate failure of some kind.
+ * 
+ * Data packets contain the command byte, an 8-bit sequence ID, the 1s complement of the sequence ID, 128 or 1024 bytes
+ * of data, and a checksum. The checksum is an 8-bit sum unless the receiver indicates it can process CRC-16s, so with
+ * no action taken the sender will initially send a metadata packet with an 8-bit checksum. The receiver should respond
+ * to this packet with a 'C' instead of a NAK, and it may send the 'C' as soon as it is ready to indicate to the sender
+ * that it's available and can process CRC-16.
+ * 
+ * The metadata packet must be ACKed, and then once more a 'C' should be sent to begin the data transfer. Each data
+ * packet must be ACKed for the next to be sent. The last packet will contain padding - if the file size was sent the
+ * receiver can truncate it. After the last packet has been ACKed, the sender will send a single EOT byte. This also
+ * should be ACKed, and then another 'C' should be sent to get the next metadata block.
+ * 
+ * A final metadata block with a zero-length filename indicates the end of the batch. The receiver ACKs this final
+ * block to complete the session.
+ * 
+ * This implementation assumes a benign sender. There are several ways that an infinite loop could be triggered, but
+ * none are plausible as a result of line noise.
+ * 
+ */
 
 #include <ctype.h>      // isdigit()
+#include <string.h>
 
 #include "ymodem.h"
 
@@ -10,7 +43,7 @@
 #define ACK     0x06    // received ok
 #define NAK     0x15    // receive error
 #define CAN     0x18    // cancel transmission
-#define CRC     0x43    // 'C' to indicate CRC desired
+#define CRCMODE 0x43    // 'C' to indicate CRC desired
 
 #define YM_OPER_TIMEOUT  (10*1000)      // 10 second timeout for operation byte
 #define YM_DATA_TIMEOUT  (1*1000)       // 1 second timeout for packet data
@@ -26,7 +59,7 @@ switch (stmt) { \
 /* Prototypes */
 static uint16_t ym_crc(const uint8_t *, uint16_t);
 static int ym_read(const YModem_ControlDef *, const uint8_t, uint8_t *);
-static uint16_t ym_get_size(const char *, uint16_t);
+static uint16_t ym_get_size(const uint8_t *, uint16_t);
 
 /**
  * Receive a YModem packet of data. This will be one control byte, two sequence bytes, 128 or 1024 data bytes, and
@@ -43,8 +76,8 @@ static uint16_t ym_get_size(const char *, uint16_t);
 static int ym_read(const YModem_ControlDef *ctrl, const uint8_t retry, uint8_t *buf) {
 
     HAL_StatusTypeDef result;
+    uint8_t _retry = retry; // HAL doesn't mark parameters const appropriately :()
     uint8_t tries;
-    uint8_t ack = ACK;
     uint16_t size;
 
     for (tries = 0; tries < 10; tries++) {
@@ -56,7 +89,7 @@ static int ym_read(const YModem_ControlDef *ctrl, const uint8_t retry, uint8_t *
             while (HAL_UART_Receive(ctrl->huart, buf, 1, 100) == HAL_OK) {}
 
             // send the retry code byte, with a short timeout
-            YM_ERRCHECK(HAL_UART_Transmit(ctrl->huart, &retry, 1, YM_DATA_TIMEOUT));
+            YM_ERRCHECK(HAL_UART_Transmit(ctrl->huart, &_retry, 1, YM_DATA_TIMEOUT));
 
         }
 
@@ -85,7 +118,7 @@ static int ym_read(const YModem_ControlDef *ctrl, const uint8_t retry, uint8_t *
             }
 
             // If the sequence numbers are wonky, retry
-            if (buf[1] != ~buf[2]) {
+            if (buf[1] != ((~buf[2]) & 0xff)) {
                 result = HAL_ERROR;
                 continue;
             }
@@ -105,7 +138,7 @@ static int ym_read(const YModem_ControlDef *ctrl, const uint8_t retry, uint8_t *
             result = HAL_UART_Receive(ctrl->huart, buf + 1, 1, YM_DATA_TIMEOUT);
 
             // If it's a CAN as well, we're done here
-            if (result == HAL_OK & buf[1] == CAN) {
+            if (result == HAL_OK && buf[1] == CAN) {
                 return YMODEM_CANCEL;
             }
 
@@ -129,19 +162,20 @@ static int ym_read(const YModem_ControlDef *ctrl, const uint8_t retry, uint8_t *
     }
 
     YM_ERRCHECK(result);
+    return YMODEM_OK;
 
 }
 
-static uint16_t ym_get_size(const char *buffer, uint16_t maxlen) {
+static uint16_t ym_get_size(const uint8_t *buffer, uint16_t maxlen) {
 
-    const char *end = buffer + maxlen;
+    const uint8_t *end = buffer + maxlen;
     uint16_t val = 0;
 
     while (buffer < end && isdigit(*buffer)) {
-        val = val * 10 + (uint16_t)*buffer - '0';
+        val = val * 10 + (uint16_t)*(buffer++) - '0';
     }
 
-    return 0;
+    return val;
 }
 
 uint8_t ymodem_receive(const YModem_ControlDef *ctrl) {
@@ -154,21 +188,19 @@ uint8_t ymodem_receive(const YModem_ControlDef *ctrl) {
 
     // Constants for common messages
     static const uint8_t cancel[2] = { CAN, CAN }; // probably a dancing pun in here somewhere
-    static const uint8_t nak[1] = { NAK };
-    static const uint8_t crc[1] = { CRC };
+    static const uint8_t crc[1] = { CRCMODE };
     static const uint8_t ack[1] = { ACK };
 
     uint32_t remaining = 0xffff;    // bytes left to receive
     uint16_t block_number = 0;      // expected block number
     uint16_t data_size;             // packet's data size
     char *filename;
-    uint8_t cmd;
     int result;
 
     do {
 
         // Read a metadata packet, or die trying
-        YM_ERRCHECK(HAL_UART_Transmit(ctrl->huart, crc, 1, YM_DATA_TIMEOUT));
+        YM_ERRCHECK(HAL_UART_Transmit(ctrl->huart, (uint8_t *)crc, 1, YM_DATA_TIMEOUT));
         if ((result = ym_read(ctrl, 'C', buffer)) != YMODEM_OK) {
             return result;
         }
@@ -178,7 +210,7 @@ uint8_t ymodem_receive(const YModem_ControlDef *ctrl) {
         // I trust the only sender to this system  not to maliciously deadlock it, so I am not defending against it.
         if (buffer[0] == EOT) {
 
-            YM_ERRCHECK(HAL_UART_Transmit(ctrl->huart, ack, 1, YM_DATA_TIMEOUT));
+            YM_ERRCHECK(HAL_UART_Transmit(ctrl->huart, (uint8_t *)ack, 1, YM_DATA_TIMEOUT));
             continue;
 
         }
@@ -188,37 +220,37 @@ uint8_t ymodem_receive(const YModem_ControlDef *ctrl) {
 
         // Metadata should be block number zero. If not, we're out of sync - cancel.
         if (buffer[1] != 0x00 || buffer[2] != 0xff) {
-            HAL_UART_Transmit(ctrl->huart, cancel, 2, YM_DATA_TIMEOUT);
+            HAL_UART_Transmit(ctrl->huart, (uint8_t *)cancel, 2, YM_DATA_TIMEOUT);
             return YMODEM_ERROR;
         }
 
         // NUL filename means end of transfer session
         if (!buffer[3]) {
-            HAL_UART_Transmit(ctrl->huart, ack, 1, YM_DATA_TIMEOUT);
+            HAL_UART_Transmit(ctrl->huart, (uint8_t *)ack, 1, YM_DATA_TIMEOUT);
             return YMODEM_OK;
         }
 
         // Try to parse out a length
-        filename = (char *)(buffer + 3);
+        filename = (char *)buffer + 3;
         remaining = strnlen(filename, data_size - 1);
         filename[remaining] = '\0';
-        remaining = ym_get_size(buffer + 3 + remaining, data_size - remaining);
+        remaining = ym_get_size(buffer + 4 + remaining, data_size - remaining - 1);
 
         // Open the file, or abort the transfer
-        if (!ctrl->open(ctrl->cb_data, filename, remaining)) {
-            HAL_UART_Transmit(ctrl->huart, cancel, 2, YM_DATA_TIMEOUT);
+        if (ctrl->open(ctrl->cb_data, filename, remaining) != YMODEM_OK) {
+            HAL_UART_Transmit(ctrl->huart, (uint8_t *)cancel, 2, YM_DATA_TIMEOUT);
             return YMODEM_ERROR;
         }
 
         // Ack it and begin data transfers
-        HAL_UART_Transmit(ctrl->huart, ack, 1, YM_DATA_TIMEOUT);
-        HAL_UART_Transmit(ctrl->huart, crc, 1, YM_DATA_TIMEOUT);
+        HAL_UART_Transmit(ctrl->huart, (uint8_t *)ack, 1, YM_DATA_TIMEOUT);
+        HAL_UART_Transmit(ctrl->huart, (uint8_t *)crc, 1, YM_DATA_TIMEOUT);
         block_number = 1;
         do {
 
             // Get the next packet
-            if ((result = ym_read(ctrl, block_number == 1 ? 'C' : NAK, buffer)) != YMODEM_OK) {
-                HAL_UART_Transmit(ctrl->huart, cancel, 2, YM_DATA_TIMEOUT);
+            if ((result = ym_read(ctrl, block_number == 1 ? CRCMODE : NAK, buffer)) != YMODEM_OK) {
+                HAL_UART_Transmit(ctrl->huart, (uint8_t *)cancel, 2, YM_DATA_TIMEOUT);
                 ctrl->close(ctrl->cb_data, result);
                 return result;
             }
@@ -231,14 +263,14 @@ uint8_t ymodem_receive(const YModem_ControlDef *ctrl) {
 
                     // close the transfer off, ACK the EOT, and go back to see if there's another file
                     ctrl->close(ctrl->cb_data, YMODEM_OK);
-                    HAL_UART_Transmit(ctrl->huart, ack, 1, YM_DATA_TIMEOUT);
+                    HAL_UART_Transmit(ctrl->huart, (uint8_t *)ack, 1, YM_DATA_TIMEOUT);
                     break;
 
                 } else {
 
                     // Could be a glitch in the command byte, but let's assume desynch error instead
                     ctrl->close(ctrl->cb_data, YMODEM_ERROR);
-                    HAL_UART_Transmit(ctrl->huart, cancel, 2, YM_DATA_TIMEOUT);
+                    HAL_UART_Transmit(ctrl->huart, (uint8_t *)cancel, 2, YM_DATA_TIMEOUT);
                     return YMODEM_ERROR;
 
                 }
@@ -246,50 +278,47 @@ uint8_t ymodem_receive(const YModem_ControlDef *ctrl) {
             }
 
             // Check sequence numbers
-            if (buffer[1] != block_number & 0xff) {
+            if (buffer[1] != (block_number & 0xff)) {
 
                 // A repeat of the last block - ACK it again and go back for more.
                 // Another infinite loop is possible here.
-                if (buffer[1] = (block_number - 1) & 0xff) {
-                    HAL_UART_Transmit(ctrl->huart, ack, 1, YM_DATA_TIMEOUT);
+                if (buffer[1] == ((block_number - 1) & 0xff)) {
+                    HAL_UART_Transmit(ctrl->huart, (uint8_t *)ack, 1, YM_DATA_TIMEOUT);
                     continue;
                 }
 
                 // Anything else is sadly fatal
                 ctrl->close(ctrl->cb_data, YMODEM_ERROR);
-                HAL_UART_Transmit(ctrl->huart, cancel, 2, YM_DATA_TIMEOUT);
+                HAL_UART_Transmit(ctrl->huart, (uint8_t *)cancel, 2, YM_DATA_TIMEOUT);
                 return YMODEM_ERROR;
 
             }
-            
+
             block_number++;
+
+            data_size = buffer[0] == STX ? 1024 : 128;
 
             // Trim data_size down if a file size was given. Once more, a hostile sender could send an infinite
             // stream of data, this check here only adjusts remaining down to zero, and will work even if no
             // file size was sent.
             if (remaining > 0) {
-                data_size = MIN(data_size, remaining);
+                data_size = remaining < data_size ? remaining : data_size;
                 remaining -= data_size;
             }
 
             // Consume the packet, or die trying
-            if (!ctrl->write(ctrl->cb_data, buffer + 3, data_size)) {
+            if (ctrl->write(ctrl->cb_data, buffer + 3, data_size) != YMODEM_OK) {
                 ctrl->close(ctrl->cb_data, YMODEM_CANCEL);
-                HAL_UART_Transmit(ctrl->huart, cancel, 2, YM_DATA_TIMEOUT);
+                HAL_UART_Transmit(ctrl->huart, (uint8_t *)cancel, 2, YM_DATA_TIMEOUT);
                 return YMODEM_CANCEL;
             }
 
-        } while (0);
+            // ACK the received packet and go get more
+            HAL_UART_Transmit(ctrl->huart, (uint8_t *)ack, 1, YM_DATA_TIMEOUT);
+
+        } while (1);
 
     } while (1);
-
-    // receive file header
-    // if not zero-length file:
-    //    ctrl->open()
-    //    while not terminated:
-    //        receive data packet (check CRC, packet number)
-    //        ctrl->write() the data
-    //    ctrl->close()
 
 }
 
@@ -341,8 +370,7 @@ uint8_t ymodem_receive(const YModem_ControlDef *ctrl) {
  * Thanks to the excellent CRC documentation at http://www.sunshine2k.de/articles/coding/crc/understanding_crc.html
  * and Arjen Lentz' 8-bit CRC 32-entry function at https://lentz.com.au/blog/tag/crc-table-generator.
  * 
- * Note that in STM32 code, declaring a const as below is sufficient to store it in Flash, not SRAM.
- * 
+ * As this is declared static, it will be stored in Flash, not SRAM.
  */
 
 static const uint16_t ym_crc_tab[32] = {
@@ -355,6 +383,8 @@ static const uint16_t ym_crc_tab[32] = {
 
 /**
  * Compute a YModem CRC-16.
+ * 
+ * If the two bytes of the CRC are included in <buf> this will return zero when no errors are detected.
  */
 static uint16_t ym_crc(const uint8_t *buf, uint16_t size) {
 
@@ -368,20 +398,3 @@ static uint16_t ym_crc(const uint8_t *buf, uint16_t size) {
     return crc;
 
 }
-
-
-
-// receiver sends 'C' to indicate CRC-16 mode
-// sender sends a frame zero data packet for block 0
-//   pathname: ASCIIZ, typically no spaces, no path
-//   length: decimal string
-//   mtime: octal string
-//   file mode: octal string
-//   other fields
-//   all fields after filename are optional, and space separated. remaining packet is NUL.
-// CRC16 is included
-// ACK+C it if OK, NAK it if CRC error, CANx2 to give up altogether
-// each packet has a counter and negation of counter byte, with 1 for the first data packet
-// this wraps at 256
-// the file is terminated with 0x04, which should be ACKd, followed by another 'C'
-// the last file in a batch transmission has a zero-length filename, ACK on this control packet terminates the session

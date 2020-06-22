@@ -5,6 +5,7 @@
 
 #include "main.h"
 #include "cli.h"
+#include "ymodem.h"
 
 // State machine transitions
 #define STATE_IDLE      0           // waiting for a system command
@@ -13,6 +14,7 @@
 #define CMD_HELLO       'h'         // show hello message
 #define CMD_HELP        '?'         // show help message
 #define CMD_SPI_INFO    'i'         // retrieve ROM information
+#define CMD_SPI_UPLOAD  'u'         // upload ROM image
 
 // SPI constants
 #define SPI_CMD_JEDEC_ID    0x9F;   // retrieve JEDEC ID data
@@ -56,12 +58,41 @@ void cli_rom_info(CLI_SetupTypeDef *config) {
 
 }
 
+// Prepare SPI for file upload
+static int cli_open_file(CLI_SetupTypeDef *config, char *filename, uint16_t size) {
+
+    return YMODEM_OK;
+}
+
+// Write data to SPI ROM
+static int cli_write_data(CLI_SetupTypeDef *config, uint8_t *data, uint16_t size) {
+
+    return YMODEM_OK;
+}
+
+// Finalise ROM write
+static void cli_close_file(CLI_SetupTypeDef *config, uint8_t status) {
+    UNUSED(config);
+    UNUSED(status);
+}
+
 void cli_loop(CLI_SetupTypeDef *config) {
     static char cmd;
     static char *welcome = "ROMble programmer UI online\r\n? for help\r\n";
     static char *errmsg = "Unrecognised command\r\n";
-    static char *help = "'ROMble programmer commands:\r\n  ? - help\r\n  i - SPI ROM information\r\n";
+    static char *help = "'ROMble programmer commands:\r\n"
+                        "  ? - help\r\n"
+                        "  i - SPI ROM information\r\n"
+                        "  u - Upload SPI ROM data\r\n";
     int state = STATE_IDLE;
+
+    YModem_ControlDef ctrl = {
+        config->huart,
+        (void *)config,
+        &cli_open_file,
+        &cli_write_data,
+        &cli_close_file,
+    };
 
     // Infinite loop
     while (1) {
