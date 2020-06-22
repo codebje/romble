@@ -59,21 +59,48 @@ void cli_rom_info(CLI_SetupTypeDef *config) {
 }
 
 // Prepare SPI for file upload
-static int cli_open_file(CLI_SetupTypeDef *config, char *filename, uint16_t size) {
+static int cli_open_file(void *arg, const char *filename, uint32_t size) {
 
     return YMODEM_OK;
 }
 
 // Write data to SPI ROM
-static int cli_write_data(CLI_SetupTypeDef *config, uint8_t *data, uint16_t size) {
+static int cli_write_data(void *arg, const uint8_t *data, uint16_t size) {
 
     return YMODEM_OK;
 }
 
 // Finalise ROM write
-static void cli_close_file(CLI_SetupTypeDef *config, uint8_t status) {
-    UNUSED(config);
+static void cli_close_file(void *arg, uint8_t status) {
+    UNUSED(arg);
     UNUSED(status);
+}
+
+static void cli_rom_upload(CLI_SetupTypeDef *config) {
+
+    static char *ready = "ROMble ready to receive file... ";
+    static char *okay = "OK!\r\n";
+    static char *fail = "transfer failed\r\n";
+
+    const YModem_ControlDef ctrl = {
+        config->huart,
+        (void *)config,
+        &cli_open_file,
+        &cli_write_data,
+        &cli_close_file,
+    };
+
+    HAL_UART_Transmit(config->huart, (uint8_t *)ready, strlen(ready), HAL_MAX_DELAY);
+
+    switch (ymodem_receive(&ctrl)) {
+        case YMODEM_OK:
+            HAL_UART_Transmit(config->huart, (uint8_t *)okay, strlen(okay), HAL_MAX_DELAY);
+            break;
+        default:
+            HAL_UART_Transmit(config->huart, (uint8_t *)fail, strlen(fail), HAL_MAX_DELAY);
+            break;
+    }
+
 }
 
 void cli_loop(CLI_SetupTypeDef *config) {
@@ -85,14 +112,6 @@ void cli_loop(CLI_SetupTypeDef *config) {
                         "  i - SPI ROM information\r\n"
                         "  u - Upload SPI ROM data\r\n";
     int state = STATE_IDLE;
-
-    YModem_ControlDef ctrl = {
-        config->huart,
-        (void *)config,
-        &cli_open_file,
-        &cli_write_data,
-        &cli_close_file,
-    };
 
     // Infinite loop
     while (1) {
@@ -110,6 +129,8 @@ void cli_loop(CLI_SetupTypeDef *config) {
                         case CMD_SPI_INFO:
                             cli_rom_info(config);
                             break;
+                        case CMD_SPI_UPLOAD:
+                            cli_rom_upload(config);
                         default:
                             HAL_UART_Transmit(config->huart, (uint8_t *)errmsg, strlen(errmsg), HAL_MAX_DELAY);
                             break;
