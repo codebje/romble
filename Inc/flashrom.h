@@ -24,7 +24,9 @@ typedef struct __SPI_ROM_ConfigDef {
     uint16_t ss_pin;
 } SPI_ROM_ConfigDef;
 
-HAL_StatusTypeDef spi_rom_read_jedec_id(SPI_ROM_ConfigDef *config, uint8_t *manufacturer, uint16_t *device_id);
-HAL_StatusTypeDef spi_rom_erase(SPI_ROM_ConfigDef *config, uint32_t address, uint8_t type);
+HAL_StatusTypeDef spi_rom_read_jedec_id(const SPI_ROM_ConfigDef *, uint8_t *, uint16_t *);
+HAL_StatusTypeDef spi_rom_erase(const SPI_ROM_ConfigDef *, uint32_t, uint8_t);
+HAL_StatusTypeDef spi_rom_program(const SPI_ROM_ConfigDef *, uint32_t, const uint8_t *, uint16_t);
+HAL_StatusTypeDef spi_rom_read_page(const SPI_ROM_ConfigDef *, uint32_t, uint8_t *);
 
 #endif

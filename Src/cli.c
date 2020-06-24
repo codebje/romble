@@ -12,6 +12,7 @@
 typedef struct __CLI_ROM_Upload {
     SPI_ROM_ConfigDef *spi_rom;
     uint32_t address;
+    uint32_t erased;
     uint32_t filesize;
 } CLI_ROM_Upload;
 
@@ -23,8 +24,10 @@ typedef struct __CLI_ROM_Upload {
 #define CMD_HELP        '?'         // show help message
 #define CMD_SPI_INFO    'i'         // retrieve ROM information
 #define CMD_SPI_UPLOAD  'u'         // upload ROM image
+#define CMD_SPI_PEEK    'p'         // dump the first page of the ROM
 
-void cli_rom_info(CLI_SetupTypeDef *config) {
+void cli_rom_info(const CLI_SetupTypeDef *config)
+{
 
     static char buffer[128];
     static char *busy = "Error: SPI system is busy\r\n";
@@ -57,8 +60,11 @@ void cli_rom_info(CLI_SetupTypeDef *config) {
 
 }
 
+static char *upload_error = "unknown error\r\n";
+
 // Prepare SPI for file upload
-static int cli_open_file(void *arg, const char *filename, uint32_t size) {
+static int cli_open_file(void *arg, const char *filename, uint32_t size)
+{
 
     CLI_ROM_Upload *upload = (CLI_ROM_Upload *)arg;
     HAL_StatusTypeDef result;
@@ -69,10 +75,12 @@ static int cli_open_file(void *arg, const char *filename, uint32_t size) {
 
     // Is the SPI device present and correct?
     if (result != HAL_OK || manufacturer != SPI_ROM_MANUFACTURER_WINBOND || device_id != SPI_ROM_WINBOND_W25Q32xV) {
+        upload_error = "bad SPI device";
         return YMODEM_ERROR;
     }
 
     upload->address = 0;
+    upload->erased = 0;
     upload->filesize = size;
 
     // Flag that ROM programming is in progress
@@ -83,33 +91,75 @@ static int cli_open_file(void *arg, const char *filename, uint32_t size) {
 }
 
 // Write data to SPI ROM
-static int cli_write_data(void *arg, const uint8_t *data, uint16_t size) {
+static int cli_write_data(void *arg, const uint8_t *data, uint16_t size)
+{
 
     CLI_ROM_Upload *upload = (CLI_ROM_Upload *)arg;
+    uint32_t remaining;
 
-    // check to see how much flash memory needs to be erased
-    uint32_t remaining = upload->filesize - upload->address;
+    // upload->erased will hold the next address requiring erasing
+    if (upload->erased <= upload->address) {
 
-    if ((upload->address >= upload->filesize || remaining < 32*1024) && (upload->address & SPI_ROM_SECTOR_MASK) == 0) {
-        // If the suggested file size is less than the uploaded data so far, or there's less than 32k left..
+        // check to see how much flash memory needs to be erased
+        if (upload->address >= upload->filesize) {
+            // no filesize given, or it wasn't right - remaining is set to the current write size
+            remaining = size;
+        } else {
+            remaining = upload->filesize - upload->address;
+        }
 
-    } else if (remaining < 64*1024 && (upload->address & SPI_ROM_BLOCK_MASK) == 0) {
+        if (remaining > 64 * 1024) {
 
-    } else if (remaining >= 64*1024 && (upload->address & SPI_ROM_LARGE_BLOCK_MASK) == 0) {
+            // Erase a 64k block, which will leave upload->erased on a 64k boundary, safe for 64k/32k/4k erases
+            if (spi_rom_erase(upload->spi_rom, upload->address, SPI_ROM_ERASE_LARGE_BLOCK) != HAL_OK) {
+
+                upload_error = "bad ROM erase 64k\r\n";
+                return YMODEM_ERROR;
+
+            }
+
+            upload->erased += 64 * 1024;
+
+        } else if (remaining > 32 * 1024) {
+
+            // Erase a 32k block, which will leave upload->erased on a 32k boundary, safe for 32k/4k erases
+            if (spi_rom_erase(upload->spi_rom, upload->address, SPI_ROM_ERASE_BLOCK) != HAL_OK) {
+
+                upload_error = "bad ROM erase 32k\r\n";
+                return YMODEM_ERROR;
+
+            }
+
+            upload->erased += 32 * 1024;
+
+        } else {
+
+            // Erase a 4k sector, only 4k erases will be safe from here to the end of the transfer
+            if (spi_rom_erase(upload->spi_rom, upload->address, SPI_ROM_ERASE_SECTOR) != HAL_OK) {
+
+                upload_error = "bad ROM erase 4k\r\n";
+                return YMODEM_ERROR;
+
+            }
+
+            upload->erased += 4 * 1024;
+
+        }
 
     }
 
-    //      if (size - address) > 64k and address is on a 64k boundary, erase a 64k block
-    // else if (size - address) > 32k and address is on a 32k boundary, erase a 32k block
-    // else if                            address is on a  4k boundary, erase a 4k sector
+    // This will write in at most 256-byte chunks
+    spi_rom_program(upload->spi_rom, upload->address, data, size);
 
+    upload->address += size;
 
     return YMODEM_OK;
 
 }
 
 // Finalise ROM write
-static void cli_close_file(void *arg, uint8_t status) {
+static void cli_close_file(void *arg, uint8_t status)
+{
 
     UNUSED(arg);
     UNUSED(status);
@@ -118,7 +168,8 @@ static void cli_close_file(void *arg, uint8_t status) {
 
 }
 
-static void cli_rom_upload(CLI_SetupTypeDef *config) {
+static void cli_rom_upload(CLI_SetupTypeDef *config)
+{
 
     static char *ready = "ROMble ready to receive file... ";
     static char *okay = "OK!\r\n";
@@ -150,7 +201,40 @@ static void cli_rom_upload(CLI_SetupTypeDef *config) {
             break;
         default:
             HAL_UART_Transmit(config->huart, (uint8_t *)fail, strlen(fail), HAL_MAX_DELAY);
+            HAL_UART_Transmit(config->huart, (uint8_t *)upload_error, strlen(upload_error), HAL_MAX_DELAY);
             break;
+    }
+
+}
+
+static void cli_rom_peek(CLI_SetupTypeDef *config)
+{
+
+    static char *error = "Error reading from Flash ROM\r\n";
+    static char buffer[80];
+    static uint8_t page[256];
+    uint8_t i;
+
+    // read a page from the ROM
+    if (spi_rom_read_page(&config->spi_rom, 0, page) == HAL_OK) {
+
+        for (i = 0; i < 16; i++) {
+
+            snprintf(buffer, 80,
+                    "%02X %02X %02X %02X %02X %02X %02X %02X - %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+                    page[i*16+0], page[i*16+1], page[i*16+2], page[i*16+3],
+                    page[i*16+4], page[i*16+5], page[i*16+6], page[i*16+7],
+                    page[i*16+8], page[i*16+9], page[i*16+10], page[i*16+11],
+                    page[i*16+12], page[i*16+13], page[i*16+14], page[i*16+15]
+            );
+            HAL_UART_Transmit(config->huart, (uint8_t *)buffer, strlen(buffer), HAL_MAX_DELAY);
+
+        }
+
+    } else {
+
+        HAL_UART_Transmit(config->huart, (uint8_t *)error, strlen(error), HAL_MAX_DELAY);
+
     }
 
 }
@@ -192,6 +276,12 @@ void cli_loop(CLI_SetupTypeDef *config) {
                             break;
                         case CMD_SPI_UPLOAD:
                             cli_rom_upload(config);
+                            break;
+                        case CMD_SPI_PEEK:
+                            cli_rom_peek(config);
+                            break;
+                        case 'e':
+                            spi_rom_erase(&config->spi_rom, 0, SPI_ROM_ERASE_SECTOR);
                             break;
                         default:
                             HAL_UART_Transmit(config->huart, (uint8_t *)errmsg, strlen(errmsg), HAL_MAX_DELAY);
