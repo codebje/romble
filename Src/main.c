@@ -43,7 +43,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-SPI_HandleTypeDef hspi5;
+SPI_HandleTypeDef hspi3;
 
 UART_HandleTypeDef huart2;
 
@@ -56,8 +56,8 @@ osThreadId_t cliHandle;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_SPI5_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_SPI3_Init(void);
 void StartDefaultTask(void *argument);
 void StartCLITask(void *argument);
 
@@ -99,8 +99,8 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_SPI5_Init();
   MX_USART2_UART_Init();
+  MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -136,7 +136,7 @@ int main(void)
   const osThreadAttr_t cli_attributes = {
     .name = "cli",
     .priority = (osPriority_t) osPriorityHigh,
-    .stack_size = 128
+    .stack_size = 1024
   };
   cliHandle = osThreadNew(StartCLITask, NULL, &cli_attributes);
 
@@ -203,40 +203,40 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief SPI5 Initialization Function
+  * @brief SPI3 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_SPI5_Init(void)
+static void MX_SPI3_Init(void)
 {
 
-  /* USER CODE BEGIN SPI5_Init 0 */
+  /* USER CODE BEGIN SPI3_Init 0 */
 
-  /* USER CODE END SPI5_Init 0 */
+  /* USER CODE END SPI3_Init 0 */
 
-  /* USER CODE BEGIN SPI5_Init 1 */
+  /* USER CODE BEGIN SPI3_Init 1 */
 
-  /* USER CODE END SPI5_Init 1 */
-  /* SPI5 parameter configuration*/
-  hspi5.Instance = SPI5;
-  hspi5.Init.Mode = SPI_MODE_MASTER;
-  hspi5.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi5.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi5.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi5.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi5.Init.NSS = SPI_NSS_SOFT;
-  hspi5.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
-  hspi5.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi5.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi5.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi5.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi5) != HAL_OK)
+  /* USER CODE END SPI3_Init 1 */
+  /* SPI3 parameter configuration*/
+  hspi3.Instance = SPI3;
+  hspi3.Init.Mode = SPI_MODE_MASTER;
+  hspi3.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi3.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi3.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi3.Init.NSS = SPI_NSS_SOFT;
+  hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi3.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi3.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi3.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi3.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi3) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI5_Init 2 */
+  /* USER CODE BEGIN SPI3_Init 2 */
 
-  /* USER CODE END SPI5_Init 2 */
+  /* USER CODE END SPI3_Init 2 */
 
 }
 
@@ -286,13 +286,14 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(SPI5_SS_GPIO_Port, SPI5_SS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SPI3_SS_GPIO_Port, SPI3_SS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -307,12 +308,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : SPI5_SS_Pin */
-  GPIO_InitStruct.Pin = SPI5_SS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  /*Configure GPIO pin : SPI3_SS_Pin */
+  GPIO_InitStruct.Pin = SPI3_SS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(SPI5_SS_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(SPI3_SS_GPIO_Port, &GPIO_InitStruct);
 
 }
 
@@ -333,7 +334,7 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    osDelay(100000);
   }
   /* USER CODE END 5 */ 
 }
@@ -347,15 +348,17 @@ void StartDefaultTask(void *argument)
 /* USER CODE END Header_StartCLITask */
 void StartCLITask(void *argument)
 {
-  /* USER CODE BEGIN StartCLITask */
-  CLI_SetupTypeDef cli_config = {
-    &huart2,
-    &hspi5,
-    SPI5_SS_GPIO_Port,
-    SPI5_SS_Pin
-  };
-  cli_loop(&cli_config);
-  /* USER CODE END StartCLITask */
+    /* USER CODE BEGIN StartCLITask */
+    static CLI_SetupTypeDef cli_config = {
+        &huart2,
+        {
+            &hspi3,
+            SPI3_SS_GPIO_Port,
+            SPI3_SS_Pin
+        }
+    };
+    cli_loop(&cli_config);
+    /* USER CODE END StartCLITask */
 }
 
 /**
