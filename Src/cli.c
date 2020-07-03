@@ -7,6 +7,7 @@
 #include "main.h"
 #include "cli.h"
 #include "ymodem.h"
+#include "sstrom.h"
 
 // When writing a ROM image, this structure tracks the work done so far.
 typedef struct __CLI_ROM_Upload {
@@ -25,6 +26,9 @@ typedef struct __CLI_ROM_Upload {
 #define CMD_SPI_INFO    'i'         // retrieve ROM information
 #define CMD_SPI_UPLOAD  'u'         // upload ROM image
 #define CMD_SPI_PEEK    'p'         // dump the first page of the ROM
+#define CMD_SST_INFO    'x'         // retrieve parallel ROM information
+#define CMD_SST_PEEK    'o'         // dump first 128 bytes of parallel ROM
+#define CMD_SST_UPLOAD  'r'         // upload parallel ROM image
 
 void cli_rom_info(const CLI_SetupTypeDef *config)
 {
@@ -57,6 +61,22 @@ void cli_rom_info(const CLI_SetupTypeDef *config)
             break;
 
     }
+
+}
+
+void cli_prom_info(const CLI_SetupTypeDef *config)
+{
+
+    static char buffer[128];
+
+    uint8_t manufacturer;
+    uint8_t device_id;
+
+    sst_rom_read_id(&manufacturer, &device_id);
+
+    snprintf(buffer, sizeof(buffer), "Manufacturer: %02x\r\nDevice ID: %02x\r\n",
+        manufacturer, device_id);
+    HAL_UART_Transmit(config->huart, (uint8_t *)buffer, strlen(buffer), HAL_MAX_DELAY);
 
 }
 
@@ -207,6 +227,89 @@ static void cli_rom_upload(CLI_SetupTypeDef *config)
 
 }
 
+static int cli_sst_open_file(void *arg, const char *filename, uint32_t size)
+{
+
+    UNUSED(arg);
+    UNUSED(filename);
+    UNUSED(size);
+
+    HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+
+    return YMODEM_OK;
+
+}
+
+static int cli_sst_write_data(void *arg, const uint8_t *data, uint16_t size)
+{
+
+    uint32_t *address = (uint32_t *)arg;
+
+    if ((*address & 0xfff) == 0 || ((*address & 0x3f000) != ((*address + size) & 0x3f000))) {
+        sst_rom_erase(*address, SST_ROM_ERASE_SECTOR);
+    }
+
+    if (sst_rom_program(*address, data, size) != HAL_OK) {
+        return YMODEM_ERROR;
+    }
+
+    *address += size;
+
+    return YMODEM_OK;
+
+}
+
+
+static void cli_sst_close_file(void *arg, uint8_t status)
+{
+
+    UNUSED(arg);
+    UNUSED(status);
+
+    HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+
+}
+
+
+static void cli_sst_upload(CLI_SetupTypeDef *config)
+{
+
+    static char *ready = "ROMble ready to receive file... ";
+    static char *okay = "OK!\r\n";
+    static char *fail = "transfer failed\r\n";
+
+    uint32_t address = 0;
+    const YModem_ControlDef ctrl = {
+        config->huart,
+        (void *)&address,
+        &cli_sst_open_file,
+        &cli_sst_write_data,
+        &cli_sst_close_file,
+    };
+
+    HAL_UART_Transmit(config->huart, (uint8_t *)ready, strlen(ready), HAL_MAX_DELAY);
+
+    // Wait 5 seconds for user to select the file
+    osDelay(configTICK_RATE_HZ * 5);
+
+    uint8_t result = ymodem_receive(&ctrl);
+
+    HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+
+    osDelay(configTICK_RATE_HZ * 1);
+
+    switch (result) {
+        case YMODEM_OK:
+            HAL_UART_Transmit(config->huart, (uint8_t *)okay, strlen(okay), HAL_MAX_DELAY);
+            break;
+        default:
+            HAL_UART_Transmit(config->huart, (uint8_t *)fail, strlen(fail), HAL_MAX_DELAY);
+            HAL_UART_Transmit(config->huart, (uint8_t *)upload_error, strlen(upload_error), HAL_MAX_DELAY);
+            break;
+    }
+
+}
+
 static void cli_rom_peek(CLI_SetupTypeDef *config)
 {
 
@@ -239,14 +342,46 @@ static void cli_rom_peek(CLI_SetupTypeDef *config)
 
 }
 
+static void cli_sst_peek(CLI_SetupTypeDef *config)
+{
+
+    static char buffer[80];
+    static uint8_t sector[4096];
+    uint8_t i;
+
+    sst_rom_read_sector(0, sector);
+
+    // display 512 bytes of data
+    for (i = 0; i < 32; i++) {
+
+        snprintf(buffer, 80,
+            "%02X %02X %02X %02X %02X %02X %02X %02X - %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+            sector[i*16+0],  sector[i*16+1],  sector[i*16+2],  sector[i*16+3],
+            sector[i*16+4],  sector[i*16+5],  sector[i*16+6],  sector[i*16+7],
+            sector[i*16+8],  sector[i*16+9],  sector[i*16+10], sector[i*16+11],
+            sector[i*16+12], sector[i*16+13], sector[i*16+14], sector[i*16+15]
+        );
+        HAL_UART_Transmit(config->huart, (uint8_t *)buffer, strlen(buffer), HAL_MAX_DELAY);
+
+    }
+
+}
+
 void cli_loop(CLI_SetupTypeDef *config) {
     static char cmd;
     static char *welcome = "ROMble programmer UI online\r\n? for help\r\n";
     static char *errmsg = "Unrecognised command\r\n";
     static char *help = "ROMble programmer commands:\r\n"
                         "  ? - help\r\n"
+                        "  h - hello & debug info\r\n"
                         "  i - SPI ROM information\r\n"
-                        "  u - Upload SPI ROM data\r\n";
+                        "  p - Peek SPI ROM data\r\n"
+                        "  u - Upload SPI ROM data\r\n"
+                        "  x - Parallel ROM information\r\n"
+                        "  o - Peek parallel ROM data\r\n"
+                        "  r - Upload parallel ROM data\r\n"
+                        ;
+
     static char ticker[100];
     int state = STATE_IDLE;
 
@@ -280,8 +415,14 @@ void cli_loop(CLI_SetupTypeDef *config) {
                         case CMD_SPI_PEEK:
                             cli_rom_peek(config);
                             break;
-                        case 'e':
-                            spi_rom_erase(&config->spi_rom, 0, SPI_ROM_ERASE_SECTOR);
+                        case CMD_SST_INFO:
+                            cli_prom_info(config);
+                            break;
+                        case CMD_SST_PEEK:
+                            cli_sst_peek(config);
+                            break;
+                        case CMD_SST_UPLOAD:
+                            cli_sst_upload(config);
                             break;
                         default:
                             HAL_UART_Transmit(config->huart, (uint8_t *)errmsg, strlen(errmsg), HAL_MAX_DELAY);
