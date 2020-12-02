@@ -17,6 +17,8 @@ static inline uint8_t sst_get_data() {
     return *((volatile uint8_t *)&GPIOC->IDR);
 }
 
+uint32_t bpins = 0;
+
 // address lines are all over the joint
 static inline void sst_set_address(uint32_t address)
 {
@@ -37,9 +39,10 @@ static inline void sst_set_address(uint32_t address)
          | ((address & (1<<8)) << 5)                // A8
          | ((address & (1<<12)) >> 3)               // A12
          | ((address & (1<<15)) >> 5)               // A15
-         | ((address & (1<16)) >> 4);
+         | ((address & (1<<16)) >> 4);              // A16
     bsrr |= (~bsrr & 0b1111011111110111) << 16;
     GPIOB->BSRR = bsrr;
+    bpins = bsrr;
 
 }
 
@@ -266,7 +269,6 @@ HAL_StatusTypeDef sst_rom_erase(uint32_t address, uint8_t type)
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
     for (timeout = 0; timeout < max_tries; timeout++) {
-
         // data bit 7 will be inverted until programming is complete
         if ((sst_read(address) & 0x80) == 0x80) {
             break;
@@ -325,8 +327,8 @@ HAL_StatusTypeDef sst_rom_program(uint32_t address, const uint8_t *data, uint32_
         sst_write(0x5555, SST_COMMAND_WRITE);
         sst_write(byte + address, data[byte]);
 
-        // At least 50ns, almost certainly more
-        for (int i = 0; i < 5; i++) __NOP();
+        // At least 100ns, almost certainly more
+        for (int i = 0; i < 10; i++) __NOP();
 
         portEXIT_CRITICAL();
 
@@ -337,8 +339,8 @@ HAL_StatusTypeDef sst_rom_program(uint32_t address, const uint8_t *data, uint32_
         GPIO_InitStruct.Pull = GPIO_PULLUP;
         HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-        // each read is at least 40ns, 500x40ns = 2µs
-        for (timeout = 0; timeout < 500; timeout++) {
+        // each read is at least 40ns, 2000x40ns = 8µs
+        for (timeout = 0; timeout < 2000; timeout++) {
 
             // data bit 7 will be inverted until programming is complete
             if ((sst_read(byte + address) & 0x80) == (data[byte] & 0x80)) {
